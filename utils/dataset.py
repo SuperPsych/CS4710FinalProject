@@ -11,7 +11,7 @@ class MusicEmotionDataset(Dataset):
         self.df = pd.read_csv(metadata_csv)
         self.mode = mode
         self.tokenizer = get_lyrics_tokenizer(bert_model_name)
-        self.emotion_to_idx = {e: i for i in EMOTIONS}
+        self.emotion_to_idx = self.emotion_to_idx = {e: i for i, e in enumerate(EMOTIONS)}
 
     def __len__(self):
         return len(self.df)

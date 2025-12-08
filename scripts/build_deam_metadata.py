@@ -10,27 +10,33 @@ DEAM_AUDIO_DIR = "data/raw/deam_audio"
 # ---- 1. CONFIG: adjust these if your column names differ ----
 # Open one of the CSVs once to confirm these names.
 SONG_ID_COL    = "song_id"       # or "songID" etc.
-VALENCE_COL    = "valence_mean"  # e.g. "valence_mean"
-AROUSAL_COL    = "arousal_mean"  # e.g. "arousal_mean"
+VALENCE_COL    = " valence_mean"  # e.g. "valence_mean"
+AROUSAL_COL    = " arousal_mean"  # e.g. "arousal_mean"
 
 # We’ll map valence/arousal → these 4 labels
 EMOTIONS = ["happy", "sad", "angry", "calm"]
 
 
-def va_to_emotion(valence: float, arousal: float) -> str:
+def va_to_emotion(valence_raw: float, arousal_raw: float) -> str:
     """
     Simple quadrant-based mapping.
     Assumes valence/arousal roughly in [-1, 1].
     Tweak thresholds if needed (e.g., 0.0 → 0.1).
     """
-    if valence >= 0 and arousal >= 0:
-        return "happy"   # high valence, high arousal
-    if valence >= 0 and arousal < 0:
-        return "calm"    # high valence, low arousal
-    if valence < 0 and arousal >= 0:
-        return "angry"   # low valence, high arousal
-    return "sad"         # low valence, low arousal
+    # normalize to roughly [-1, 1]
+    v = (valence_raw - 5.0) / 4.0
+    a = (arousal_raw - 5.0) / 4.0
 
+    # optional “dead zone” around neutral to avoid noise
+    # (you can tweak 0.1 → 0.2 if you want stronger neutral band)
+    # here we keep it simple and just use sign.
+    if v >= 0 and a >= 0:
+        return "happy"  # high valence, high arousal
+    if v >= 0 and a < 0:
+        return "calm"  # high valence, low arousal
+    if v < 0 and a >= 0:
+        return "angry"  # low valence, high arousal
+    return "sad"  # low valence, low arousal
 
 def find_audio_file(song_id: int | str) -> str | None:
     """
@@ -50,18 +56,11 @@ def find_audio_file(song_id: int | str) -> str | None:
     # Generic guesses (you can add/remove patterns once you see your filenames)
     if sid_int is not None:
         candidates.extend([
-            os.path.join(DEAM_AUDIO_DIR, f"{sid_int}.wav"),
-            os.path.join(DEAM_AUDIO_DIR, f"{sid_int:04d}.wav"),
-            os.path.join(DEAM_AUDIO_DIR, f"song_{sid_int}.wav"),
-            os.path.join(DEAM_AUDIO_DIR, f"deam_{sid_int}.wav"),
+            os.path.join(DEAM_AUDIO_DIR, f"{sid_int}.mp3"),
+            os.path.join(DEAM_AUDIO_DIR, f"{sid_int:04d}.mp3"),
+            os.path.join(DEAM_AUDIO_DIR, f"song_{sid_int}.mp3"),
+            os.path.join(DEAM_AUDIO_DIR, f"deam_{sid_int}.mp3"),
         ])
-
-    # Also try string-based directly
-    song_str = str(song_id)
-    candidates.extend([
-        os.path.join(DEAM_AUDIO_DIR, f"{song_str}.wav"),
-        os.path.join(DEAM_AUDIO_DIR, f"{song_str}.mp3"),
-    ])
 
     for path in candidates:
         if os.path.exists(path):
