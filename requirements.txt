@@ -1,0 +1,11 @@
+torch
+torchaudio
+transformers
+librosa
+numpy
+pandas
+scikit-learn
+scipy
+tqdm
+pretty_midi
+streamlit
