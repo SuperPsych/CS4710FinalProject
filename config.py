@@ -1,4 +1,5 @@
 import os
+import torch
 
 DATA_DIR = "data"
 RAW_DIR = os.path.join(DATA_DIR, "raw")
@@ -11,8 +12,7 @@ AUDIO_SR = 22050
 N_MELS = 128
 SPEC_LEN = 128  # time frames
 
-DEVICE = "cuda"
-# DEVICE = "cpu"  # uncomment if no GPU
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 MODEL_DIR = "saved_models"
 os.makedirs(MODEL_DIR, exist_ok=True)
