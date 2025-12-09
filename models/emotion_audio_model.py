@@ -3,35 +3,45 @@ import torch.nn as nn
 
 class AudioEmotionCNN(nn.Module):
     """
-    Simple CNN on mel-spectrograms: input [B, 1, N_MELS, SPEC_LEN]
+    Lightweight CNN on mel-spectrograms: input [B, 1, N_MELS, SPEC_LEN]
+    Much faster on CPU than the original version.
     """
-    def __init__(self, num_emotions: int):
+    def __init__(self, num_emotions: int, base_channels: int = 8):
         super().__init__()
-        self.conv = nn.Sequential(
-            nn.Conv2d(1, 16, kernel_size=3, padding=1),
-            nn.BatchNorm2d(16),
-            nn.ReLU(),
+
+        c1 = base_channels          # 8 by default
+        c2 = base_channels * 2      # 16
+        c3 = base_channels * 4      # 32
+
+        self.features = nn.Sequential(
+            # Block 1
+            nn.Conv2d(1, c1, kernel_size=3, padding=1),
+            nn.BatchNorm2d(c1),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(2),        # downsample by 2
+
+            # Block 2
+            nn.Conv2d(c1, c2, kernel_size=3, padding=1),
+            nn.BatchNorm2d(c2),
+            nn.ReLU(inplace=True),
             nn.MaxPool2d(2),
 
-            nn.Conv2d(16, 32, kernel_size=3, padding=1),
-            nn.BatchNorm2d(32),
-            nn.ReLU(),
-            nn.MaxPool2d(2),
+            # Block 3
+            nn.Conv2d(c2, c3, kernel_size=3, padding=1),
+            nn.BatchNorm2d(c3),
+            nn.ReLU(inplace=True),
 
-            nn.Conv2d(32, 64, kernel_size=3, padding=1),
-            nn.BatchNorm2d(64),
-            nn.ReLU(),
-            nn.AdaptiveMaxPool2d((4, 4)),
+            # Global average pool → [B, c3, 1, 1]
+            nn.AdaptiveAvgPool2d((1, 1)),
         )
-        self.fc = nn.Sequential(
-            nn.Flatten(),
-            nn.Linear(64 * 4 * 4, 128),
-            nn.ReLU(),
+
+        self.classifier = nn.Sequential(
+            nn.Flatten(),                  # [B, c3]
             nn.Dropout(0.3),
-            nn.Linear(128, num_emotions),
+            nn.Linear(c3, num_emotions),
         )
 
     def forward(self, x):
-        x = self.conv(x)
-        x = self.fc(x)
+        x = self.features(x)
+        x = self.classifier(x)
         return x

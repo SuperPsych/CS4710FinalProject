@@ -1,188 +1,150 @@
+# scripts/build_deam_metadata_dynamic.py
+
 import os
 import pandas as pd
-import numpy as np
 from config import METADATA_CSV
 
-STATIC_1 = "data/raw/deam_meta/annotations_averaged_per_song/song_level/static_annotations_averaged_songs_1_2000.csv"
-STATIC_2 = "data/raw/deam_meta/annotations_averaged_per_song/song_level/static_annotations_averaged_songs_2000_2058.csv"
+# Paths to the DEAM dynamic annotation files (based on your folder layout)
+AROUSAL_CSV = "data/raw/deam_meta/annotations_averaged_per_song/dynamic/arousal.csv"
+VALENCE_CSV = "data/raw/deam_meta/annotations_averaged_per_song/dynamic/valence.csv"
 
 DEAM_AUDIO_DIR = "data/raw/deam_audio"
-
-SONG_ID_COL = "song_id"
-VALENCE_COL = " valence_mean"
-AROUSAL_COL = " arousal_mean"
 
 EMOTIONS = ["happy", "sad", "angry", "calm"]
 
 
-def va_to_emotion_median(valence_raw: float, arousal_raw: float,
-                         v_median: float, a_median: float) -> str:
+def va_to_emotion(valence: float, arousal: float) -> str:
     """
-    Median-based emotion mapping - guarantees balanced classes.
+    Map DEAM dynamic valence/arousal (already roughly in [-1, 1])
+    into 4 discrete emotions using quadrants.
 
-    This uses the dataset's median values to split the valence-arousal space
-    into four equal quadrants, ensuring each emotion gets ~25% of samples.
+      v >= 0, a >= 0 -> happy
+      v >= 0, a <  0 -> calm
+      v <  0, a >= 0 -> angry
+      v <  0, a <  0 -> sad
 
-    Args:
-        valence_raw: Raw valence value (1-9 scale)
-        arousal_raw: Raw arousal value (1-9 scale)
-        v_median: Median valence in the dataset
-        a_median: Median arousal in the dataset
-
-    Returns:
-        Emotion label: "happy", "sad", "angry", or "calm"
+    You can tweak thresholds if you want a neutral band, but this
+    matches the 4-class setup (happy/calm/angry/sad).
     """
-    v_high = valence_raw > v_median
-    a_high = arousal_raw > a_median
 
-    if v_high and a_high:
-        return "happy"  # High valence, high arousal
-    elif v_high and not a_high:
-        return "calm"  # High valence, low arousal
-    elif not v_high and a_high:
-        return "angry"  # Low valence, high arousal
-    else:
-        return "sad"  # Low valence, low arousal
+    # optional: small dead-zone around 0; comment out if not wanted
+    # TH = 0.05
+    # if abs(valence) < TH:
+    #     valence = 0.0
+    # if abs(arousal) < TH:
+    #     arousal = 0.0
+
+    if valence >= 0 and arousal >= 0:
+        return "happy"
+    if valence >= 0 and arousal < 0:
+        return "calm"
+    if valence < 0 and arousal >= 0:
+        return "angry"
+    return "sad"
 
 
-def find_audio_file(song_id: int | str) -> str | None:
+def find_audio_file(song_id) -> str | None:
     """
     Try several common filename patterns for DEAM audio.
-    Returns the first existing path or None if not found.
+    This reuses the idea we had before. If you know the exact
+    pattern of your .wav files, you can tweak the candidates list.
     """
     try:
         sid_int = int(song_id)
-    except ValueError:
+    except (ValueError, TypeError):
         sid_int = None
 
     candidates = []
 
     if sid_int is not None:
         candidates.extend([
-            os.path.join(DEAM_AUDIO_DIR, f"{sid_int}.mp3"),
-            os.path.join(DEAM_AUDIO_DIR, f"{sid_int:04d}.mp3"),
-            os.path.join(DEAM_AUDIO_DIR, f"song_{sid_int}.mp3"),
-            os.path.join(DEAM_AUDIO_DIR, f"deam_{sid_int}.mp3"),
+            os.path.join(DEAM_AUDIO_DIR, f"{sid_int}.wav"),
+            os.path.join(DEAM_AUDIO_DIR, f"{sid_int:04d}.wav"),
+            os.path.join(DEAM_AUDIO_DIR, f"song_{sid_int}.wav"),
+            os.path.join(DEAM_AUDIO_DIR, f"deam_{sid_int}.wav"),
         ])
+
+    song_str = str(song_id)
+    candidates.extend([
+        os.path.join(DEAM_AUDIO_DIR, f"{song_str}.wav"),
+        os.path.join(DEAM_AUDIO_DIR, f"{song_str}.mp3"),
+    ])
 
     for path in candidates:
         if os.path.exists(path):
             return path
-
     return None
 
 
 def main():
-    print("=" * 70)
-    print("Building DEAM Metadata with MEDIAN-BASED Emotion Mapping")
-    print("=" * 70)
+    # ---- 1. Load dynamic arousal and valence ----
+    if not os.path.exists(AROUSAL_CSV):
+        raise FileNotFoundError(f"Missing {AROUSAL_CSV}")
+    if not os.path.exists(VALENCE_CSV):
+        raise FileNotFoundError(f"Missing {VALENCE_CSV}")
 
-    # ---- Load and merge the two static annotation files ----
-    if not os.path.exists(STATIC_1):
-        raise FileNotFoundError(f"Missing {STATIC_1}")
-    if not os.path.exists(STATIC_2):
-        raise FileNotFoundError(f"Missing {STATIC_2}")
+    arousal = pd.read_csv(AROUSAL_CSV)
+    valence = pd.read_csv(VALENCE_CSV)
 
-    df1 = pd.read_csv(STATIC_1)
-    df2 = pd.read_csv(STATIC_2)
-    meta = pd.concat([df1, df2], ignore_index=True)
+    # Just in case, strip whitespace in column names
+    arousal.columns = [c.strip() for c in arousal.columns]
+    valence.columns = [c.strip() for c in valence.columns]
 
-    print(f"\nLoaded {len(meta)} songs from DEAM annotations")
-    print("Columns:", list(meta.columns))
+    # ---- 2. Merge on song_id ----
+    # both have 'song_id' + many sample_* columns
+    merged = pd.merge(arousal, valence, on="song_id", suffixes=("_aro", "_val"))
 
-    # ---- Calculate medians for the entire dataset ----
-    valence_median = meta[VALENCE_COL].median()
-    arousal_median = meta[AROUSAL_COL].median()
+    # identify dynamic columns
+    aro_cols = [c for c in merged.columns if c.startswith("sample_") and c.endswith("_aro")]
+    val_cols = [c for c in merged.columns if c.startswith("sample_") and c.endswith("_val")]
 
-    print(f"\n{'=' * 70}")
-    print(f"Dataset Statistics:")
-    print(f"{'=' * 70}")
-    print(f"Valence:")
-    print(f"  Mean:   {meta[VALENCE_COL].mean():.2f}")
-    print(f"  Median: {valence_median:.2f} ← Split point")
-    print(f"  Std:    {meta[VALENCE_COL].std():.2f}")
-    print(f"\nArousal:")
-    print(f"  Mean:   {meta[AROUSAL_COL].mean():.2f}")
-    print(f"  Median: {arousal_median:.2f} ← Split point")
-    print(f"  Std:    {meta[AROUSAL_COL].std():.2f}")
-    print(f"{'=' * 70}")
+    if not aro_cols or not val_cols:
+        raise RuntimeError("Could not find dynamic sample_* columns in arousal/valence CSVs.")
 
+    # ---- 3. Compute per-song mean valence/arousal across time ----
+    # We use mean over time, ignoring NaNs (because songs have different lengths).
+    merged["valence_mean_dynamic"] = merged[val_cols].mean(axis=1, skipna=True)
+    merged["arousal_mean_dynamic"] = merged[aro_cols].mean(axis=1, skipna=True)
+
+    print("Dynamic valence summary:")
+    print(merged["valence_mean_dynamic"].describe())
+    print("\nDynamic arousal summary:")
+    print(merged["arousal_mean_dynamic"].describe())
+
+    # ---- 4. Map to discrete emotion labels ----
+    merged["emotion_label"] = merged.apply(
+        lambda r: va_to_emotion(r["valence_mean_dynamic"], r["arousal_mean_dynamic"]),
+        axis=1,
+    )
+
+    # ---- 5. Build metadata rows with audio_path + labels ----
     rows = []
     missing_audio = 0
 
-    # Track emotion distribution
-    emotion_counts = {e: 0 for e in EMOTIONS}
-
-    for _, row in meta.iterrows():
-        song_id = row[SONG_ID_COL]
-        val = float(row[VALENCE_COL])
-        aro = float(row[AROUSAL_COL])
-
+    for _, row in merged.iterrows():
+        song_id = row["song_id"]
         audio_path = find_audio_file(song_id)
 
         if audio_path is None:
             missing_audio += 1
             continue
 
-        # Use median-based mapping
-        emotion = va_to_emotion_median(val, aro, valence_median, arousal_median)
-        emotion_counts[emotion] += 1
-
         rows.append({
             "audio_path": audio_path,
-            "lyrics_path": "",
-            "emotion_label": emotion,
+            "lyrics_path": "",  # DEAM doesn’t provide lyrics
+            "emotion_label": row["emotion_label"],
             "song_id": f"deam_{song_id}",
-            "user_id": "deam_user",
-            "valence": val,
-            "arousal": aro,
+            "user_id": "deam_user",  # dummy user
         })
 
     df_out = pd.DataFrame(rows)
 
-    # ---- Print class distribution ----
-    print(f"\n{'=' * 70}")
-    print("EMOTION CLASS DISTRIBUTION (Median-Based):")
-    print(f"{'=' * 70}")
-    total = len(df_out)
-
-    for emotion in EMOTIONS:
-        count = emotion_counts[emotion]
-        pct = (count / total * 100) if total > 0 else 0
-        bar = "█" * int(pct / 2)  # Visual bar
-        print(f"{emotion.capitalize():8s}: {count:4d} ({pct:5.1f}%) {bar}")
-
-    print(f"{'=' * 70}")
-    print(f"Total:   {total} songs")
-    print(f"Skipped: {missing_audio} songs (missing audio)")
-
-    # ---- Check balance ----
-    max_count = max(emotion_counts.values())
-    min_count = min(emotion_counts.values())
-    imbalance_ratio = max_count / min_count if min_count > 0 else float('inf')
-
-    print(f"\n{'=' * 70}")
-    if imbalance_ratio < 1.5:
-        print(f"✅ EXCELLENT balance! Ratio: {imbalance_ratio:.2f}:1")
-        print(f"   All classes within 50% of each other")
-    elif imbalance_ratio < 2.0:
-        print(f"✅ GOOD balance! Ratio: {imbalance_ratio:.2f}:1")
-        print(f"   Classes reasonably balanced")
-    elif imbalance_ratio < 3.0:
-        print(f"⚠️  ACCEPTABLE balance. Ratio: {imbalance_ratio:.2f}:1")
-        print(f"   Some imbalance present but manageable")
-    else:
-        print(f"❌ POOR balance. Ratio: {imbalance_ratio:.2f}:1")
-        print(f"   Consider using class weights during training")
-    print(f"{'=' * 70}")
-
-    # ---- Save metadata ----
+    # ---- 6. Save to metadata.csv (overwrites previous) ----
     df_out.to_csv(METADATA_CSV, index=False)
-    print(f"\n✅ Saved {len(df_out)} rows to {METADATA_CSV}")
-    print(f"\nNext steps:")
-    print(f"  1. python scripts/train_emotion_audio.py")
-    print(f"  2. streamlit run app/app.py")
-    print(f"{'=' * 70}\n")
+
+    print(f"\nSaved {len(df_out)} rows to {METADATA_CSV}")
+    print(f"Skipped {missing_audio} rows due to missing audio files.")
+    print("Done building dynamic-based metadata.")
 
 
 if __name__ == "__main__":
