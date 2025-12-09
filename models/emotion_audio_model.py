@@ -4,10 +4,35 @@ import torch.nn as nn
 class AudioEmotionCNN(nn.Module):
     """
     Lightweight CNN on mel-spectrograms: input [B, 1, N_MELS, SPEC_LEN]
-    Much faster on CPU than the original version.
+
+    Flexible head:
+      - Classification: output_dim = num_emotions (e.g. 4)
+      - Regression:     output_dim = 2 (valence, arousal)
+
+    Usage:
+      # classification
+      model = AudioEmotionCNN(num_emotions=len(EMOTIONS))
+
+      # regression (valence/arousal)
+      model = AudioEmotionCNN(output_dim=2)
     """
-    def __init__(self, num_emotions: int, base_channels: int = 8):
+    def __init__(
+        self,
+        num_emotions: int | None = None,
+        output_dim: int | None = None,
+        base_channels: int = 8,
+    ):
         super().__init__()
+
+        # Backward-compatible handling:
+        # - if only num_emotions is given, use that
+        # - if output_dim is given, it overrides num_emotions
+        if output_dim is None and num_emotions is None:
+            raise ValueError("You must provide either num_emotions or output_dim.")
+        if output_dim is None:
+            output_dim = num_emotions
+
+        self.output_dim = output_dim
 
         c1 = base_channels          # 8 by default
         c2 = base_channels * 2      # 16
@@ -35,13 +60,13 @@ class AudioEmotionCNN(nn.Module):
             nn.AdaptiveAvgPool2d((1, 1)),
         )
 
-        self.classifier = nn.Sequential(
+        self.head = nn.Sequential(
             nn.Flatten(),                  # [B, c3]
             nn.Dropout(0.3),
-            nn.Linear(c3, num_emotions),
+            nn.Linear(c3, self.output_dim),
         )
 
     def forward(self, x):
         x = self.features(x)
-        x = self.classifier(x)
+        x = self.head(x)
         return x

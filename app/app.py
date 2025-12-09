@@ -18,19 +18,13 @@ from models.music_generator import MelodyGenerator, notes_to_midi
 from models.recommender import HybridRecommender
 from utils.audio_utils import load_mel_spectrogram
 from utils.lyrics_utils import load_lyrics
+from utils.emotion_mapping import va_to_emotion_from_pred   # <-- NEW
 
 
 def convert_audio_to_wav(audio_file, target_sr=22050):
     """
     Convert uploaded audio file to WAV format compatible with librosa.
     Supports: mp3, wav, flac, ogg, m4a, aac, wma, and more.
-
-    Args:
-        audio_file: Streamlit UploadedFile object
-        target_sr: Target sample rate for conversion
-
-    Returns:
-        Path to temporary WAV file
     """
     # Create temporary file with original extension
     suffix = os.path.splitext(audio_file.name)[1].lower()
@@ -70,12 +64,15 @@ def load_models():
     audio_model_path = os.path.join(MODEL_DIR, "audio_emotion_cnn.pt")
     lyrics_model_path = os.path.join(MODEL_DIR, "lyrics_emotion_bert.pt")
 
-    audio_model = AudioEmotionCNN(num_emotions=len(EMOTIONS))
+    # ---------- AUDIO MODEL: now predicts [valence, arousal] ----------
+    # Use output_dim=2 for VA regression
+    audio_model = AudioEmotionCNN(output_dim=2)
     if os.path.exists(audio_model_path):
         audio_model.load_state_dict(torch.load(audio_model_path, map_location=DEVICE))
     audio_model.to(DEVICE)
     audio_model.eval()
 
+    # ---------- LYRICS MODEL: still classification over EMOTIONS ----------
     bert_model_name = "distilbert-base-uncased"
     lyrics_model = LyricsEmotionBERT(bert_model_name, num_emotions=len(EMOTIONS))
     if os.path.exists(lyrics_model_path):
@@ -112,14 +109,14 @@ def load_models():
 
 def predict_emotion_from_audio(audio_file, audio_model):
     """
-    Predict emotion from uploaded audio file.
+    Predict emotion from uploaded audio file using VA regression model.
 
     Args:
         audio_file: Streamlit UploadedFile object
-        audio_model: Pre-trained AudioEmotionCNN model
+        audio_model: Pre-trained AudioEmotionCNN model (output_dim=2)
 
     Returns:
-        Predicted emotion string
+        (emotion_str, valence, arousal)
     """
     try:
         # Convert to WAV format
@@ -129,12 +126,16 @@ def predict_emotion_from_audio(audio_file, audio_model):
         mel = load_mel_spectrogram(wav_path)
         x = torch.tensor(mel).unsqueeze(0).unsqueeze(0).to(DEVICE)
 
-        # Predict
+        # Predict [valence, arousal]
         with torch.no_grad():
-            logits = audio_model(x)
-            pred = logits.argmax(dim=-1).item()
+            va_pred = audio_model(x).squeeze(0)  # shape [2]
+            v = -va_pred[0].item()
+            a = -va_pred[1].item()
 
-        return EMOTIONS[pred]
+        # Decode to discrete emotion
+        emotion = va_to_emotion_from_pred(v, a)
+
+        return emotion, v, a
 
     finally:
         # Clean up temporary WAV file
@@ -146,7 +147,7 @@ def predict_emotion_from_audio(audio_file, audio_model):
 
 
 def predict_emotion_from_lyrics(text, tokenizer, lyrics_model):
-    """Predict emotion from lyrics text."""
+    """Predict emotion from lyrics text (classification model)."""
     encoded = tokenizer(
         text,
         truncation=True,
@@ -163,11 +164,11 @@ def predict_emotion_from_lyrics(text, tokenizer, lyrics_model):
 
 
 def main():
-    st.title("🎵 AI-Based Music Generation & Emotion-Aware Recommendation")
+    st.title("AI-Based Music Generation & Emotion-Aware Recommendation")
 
     st.markdown("""
-    This system detects emotions from audio or lyrics, generates melodies, 
-    and recommends songs tailored to your emotional state.
+    This system detects emotions from audio or lyrics, predicts continuous valence & arousal,
+    generates melodies, and recommends songs tailored to your emotional state.
     """)
 
     st.sidebar.header("Input Options")
@@ -188,6 +189,7 @@ def main():
     audio_model, lyrics_model, tokenizer, melody_model, recommender = load_models()
 
     selected_emotion = None
+    va_from_audio = None  # (valence, arousal) if we have them
 
     if mode == "Upload audio":
         audio_file = st.file_uploader(
@@ -210,9 +212,14 @@ def main():
             if st.button("🎧 Detect Emotion from Audio"):
                 with st.spinner("Processing audio file..."):
                     try:
-                        emotion = predict_emotion_from_audio(audio_file, audio_model)
-                        st.success(f"✅ Detected emotion: **{emotion}**")
+                        emotion, v, a = predict_emotion_from_audio(audio_file, audio_model)
                         selected_emotion = emotion
+                        va_from_audio = (v, a)
+
+                        st.success(f"✅ Detected emotion: **{emotion}**")
+                        st.write(f"**Valence:** {v:.3f}")
+                        st.write(f"**Arousal:** {a:.3f}")
+
                     except Exception as e:
                         st.error(f"❌ Error processing audio: {str(e)}")
                         st.info("Please try a different file or format.")
@@ -239,7 +246,11 @@ def main():
     # Generate and recommend based on selected emotion
     if selected_emotion:
         st.divider()
-        st.subheader(f"🎯 Working with emotion: **{selected_emotion.upper()}**")
+        st.subheader(f"Working with emotion: **{selected_emotion.upper()}**")
+
+        if va_from_audio is not None:
+            v, a = va_from_audio
+            st.caption(f"(Derived from audio: valence={v:.3f}, arousal={a:.3f})")
 
         col1, col2 = st.columns(2)
 
@@ -262,7 +273,7 @@ def main():
 
         with col2:
             # Recommend songs
-            st.markdown("### 🎧 Recommended Songs")
+            st.markdown("### Recommended Songs")
             if recommender is not None:
                 recs = recommender.recommend_for_emotion(selected_emotion, top_k=10)
                 if recs:
@@ -273,7 +284,7 @@ def main():
                     st.warning("No songs found for this emotion.")
                     st.info("Check that `song_features.csv` has songs labeled with this emotion.")
             else:
-                st.error("❌ Recommender not available")
+                st.error("Recommender not available")
                 st.info("Run `scripts/build_recommender_index.py` first to build the song index.")
 
 

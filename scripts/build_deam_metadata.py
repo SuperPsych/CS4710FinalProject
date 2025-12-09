@@ -131,10 +131,12 @@ def main():
 
         rows.append({
             "audio_path": audio_path,
-            "lyrics_path": "",  # DEAM doesn’t provide lyrics
-            "emotion_label": row["emotion_label"],
+            "lyrics_path": "",
+            "emotion_label": row["emotion_label"],  # keep it for analysis
+            "valence": row["valence_mean_dynamic"],
+            "arousal": row["arousal_mean_dynamic"],
             "song_id": f"deam_{song_id}",
-            "user_id": "deam_user",  # dummy user
+            "user_id": "deam_user",
         })
 
     df_out = pd.DataFrame(rows)
